@@ -4,29 +4,29 @@ from requests import get
 import nltk
 from plot_words import plot_map
 from nltk.corpus import stopwords
-from get_location import WordLocator 
+from get_location import WordLocator
 import time
 import pickle
+import sys
+from os import listdir
+from os.path import isfile, join
+import itertools
+import threading
+
 # nltk.download()
 
 REMOVE_STOP_WORDS = False
+SAVE_PLOT = True
+# precision for graph
 ROUND_PRECISION = 3
-CUT_OFF = 100
-TITLE = 'TEST'
-# TEXT, ONLINE
+# percentage cutoff on the number of words in the plot. set to -1 for no cut off
+# affects linear regression
+WORD_CUT_OFF = 20
+# input source: TEXT, ONLINE
 INPUT_TYPE = 'TEXT'
-FILENAME = 'texts/modestproposal.txt'
-URL_LIST = ['https://www.cnn.com/2019/12/06/politics/trump-supreme-court-financial-documents-house-subpoena/index.html',
-            'https://www.cnn.com/2019/12/07/politics/us-taliban-peace-talks-resume-doha-qatar/index.html',
-            'https://www.cnn.com/travel/article/china-fake-meat-vegetarian-intl-hnk/index.html',
-            'https://www.cnn.com/travel/article/world-champion-cheese-2019-rogue-river-blue-trnd/index.html',
-            'https://www.cnn.com/2019/12/07/asia/north-korea-test-intl-hnk/index.html',
-            'https://www.cnn.com/2019/12/07/middleeast/iraq-baghdad-protesters-killed-intl/index.html',
-            'https://www.cnn.com/2019/12/04/entertainment/gabrielle-union-agt-investigation/index.html',
-            'https://www.cnn.com/2019/12/04/entertainment/jason-momoa-apologizes-chris-pratt-trnd/index.html',
-            'https://www.cnn.com/2019/12/06/us/florida-ups-shootout-frank-ordonez/index.html',
-            'https://www.cnn.com/2019/12/06/us/75-foot-wave-california-bomb-cyclone-wxc-trnd/index.html']
-     
+# fill with links, if chosen ONLINE for input_type
+URL_LIST = []
+
 
 def _cleanse_word(word):
     '''cleans word by filtering out non-letters'''
@@ -34,8 +34,8 @@ def _cleanse_word(word):
 
 
 def load_articles():
-    # append all words from articles into a single string
-    text = ''
+    '''grabs articles from online sources'''
+    text = ""
     counter = 0
     for url in URL_LIST:
         response = get(url)
@@ -47,33 +47,39 @@ def load_articles():
     return text
 
 
-def get_text(): 
-    text = ''
+def get_text():
+    '''gets text from the texts folder'''
+    text = ""
+    title = ""
     if INPUT_TYPE == 'TEXT':
-        print("TEXT input, grabbing text from text file") 
-        with open(FILENAME, 'r',  encoding="utf8") as file:
+        print("TEXT input, grabbing text from text file")
+        path = "texts/"
+        files_list = [f for f in listdir(path) if isfile(join(path, f))]
+        print("Pick File to Analyze (Input Number): ")
+
+        for i in range(len(files_list)):
+            print('[' + str(i + 1) + '] ' + files_list[i])
+        selection = int(input())
+        title = files_list[selection - 1]
+        print("Picked: " + title)
+        with open(path + title, 'r',  encoding="utf8") as file:
             text = file.read().replace('\n', ' ')
     elif INPUT_TYPE == 'ONLINE':
+        # TODO: get url titles instead of generic "online"
+        title = "online"
         text = load_articles()
-        # print("ONLINE input, attempting to grab text from pickle") 
-        # try:
-        #     text = pickle.load(open("text.pickle", "rb"))
-        #     print("Successfully grabbed text from pickle")
-        # except (OSError, IOError) as e:
-        #     print("No pickle, grabbing text...")
-        #     text = load_articles()
-        #     pickle.dump(text, open("text.pickle", "wb"))
-    return text
+    return text, title
 
 
 def tokenize_words(text):
-    # tokenizes text and cleans each word
+    '''tokenizes text and cleans each word'''
     words = []
     for t in nltk.word_tokenize(text):
         cleaned = _cleanse_word(t)
         if cleaned != '':
             words.append(cleaned)
     return words
+
 
 def remove_stop_words(words):
     temp_words = words[:]
@@ -82,7 +88,9 @@ def remove_stop_words(words):
         if token in sw:
             words.remove(token)
 
+
 def get_word_freq(words):
+    '''params: all words as string. returns: list of tuples based on frequency'''
     # get frequency, returns list of tuples
     freq = nltk.FreqDist(words)
     freq_list = list(freq.items())
@@ -91,39 +99,71 @@ def get_word_freq(words):
     freq_list.reverse()
     return freq_list
 
-def normalize(word_list, code):
-    normalized_list = []
-    if code == 0:
-        largest = word_list[0][1]
-    elif code == 1:
-        largest = word_list[len(word_list) - 1][1]
-    for v, k in word_list:
-        normalized_list.append((v, k / largest))
-    return normalized_list
+
+# def normalize(word_list, code):
+#     '''normalizes slope of average distances'''
+#     normalized_list = []
+#     if code == 0:
+#         largest = word_list[0][1]
+#     elif code == 1:
+#         largest = word_list[len(word_list) - 1][1]
+#     for v, k in word_list:
+#         normalized_list.append((v, k / largest))
+#     return normalized_list
+
+def get_slope(word_list):
+    ''' params: gets list of tuples with words and average distance '''
+    ''' returns list of tuples with words and their slops based on average distance'''
+    slope_list = []
+    length = len(word_list)
+    for i in range(length):
+        if (i < length - 1):
+            slope = word_list[i + 1][1] - word_list[i][1]
+            slope_list.append((i, slope))
+    return slope_list
+
+
+def loading():
+    spinner = itertools.cycle(['-', '/', '|', '\\'])
+    while True:
+        sys.stdout.write(next(spinner))   
+        sys.stdout.flush()
+        time.sleep(0.1)              
+        sys.stdout.write('\b')
+                  
+
 
 def main():
     start_time = time.time()
- 
-    text = get_text()
+
+    # grabs text, whether from online or the texts folder. returns total tet in string and title
+    text, title = get_text()
     words = tokenize_words(text)
+    # t1 = threading.Thread(target=loading) 
+    # t1.start() 
+
     if REMOVE_STOP_WORDS:
         remove_stop_words(words)
 
     freq_list = get_word_freq(words)
-    
-    # params: list of words from article and the frequeny of words. Returns list of tuples containing words and its locations in text
+
+    # @param: list of words from article and the frequency of words. Returns list of tuples containing words and its locations in text
     word_locator = WordLocator(words, freq_list)
     word_locations = word_locator.get_word_locations()
     avg_locations = word_locator.get_avg_locations()
-    # print(word_locations)
-    # print(avg_locations)
- 
-    # print("Total words read:", words_length)
+
+    slope_list = get_slope(avg_locations)
+
+    # t1.join()
+    print("Total words read:", len(words))
     print("--- %s seconds ---" % (time.time() - start_time))
-    
-    plot_map(freq_list, len(words), TITLE, 'freq', CUT_OFF, ROUND_PRECISION)
-    plot_map(avg_locations, len(words), TITLE, 'loc', CUT_OFF, ROUND_PRECISION)
-    
+
+    # @params: source, length of the words, graph title, type of graph, whether to save or not, how many words on x axis, rounding
+    # type of graphs: freq(word frequencies), avg_dist (average distance between each word), sloped_avg (slopes of avg distances)
+    plot_map(freq_list, len(words), title, "freq", SAVE_PLOT, WORD_CUT_OFF, ROUND_PRECISION)
+    plot_map(avg_locations, len(words), title, "avg_dist", SAVE_PLOT, WORD_CUT_OFF, ROUND_PRECISION)
+    plot_map(slope_list, len(words), title, "sloped_avg", SAVE_PLOT, WORD_CUT_OFF, ROUND_PRECISION)
+
 
 if __name__ == "__main__":
     main()
